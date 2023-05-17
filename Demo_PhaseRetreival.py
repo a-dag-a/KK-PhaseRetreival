@@ -28,8 +28,10 @@ original_signal = original_signal[int(len(original_signal)/4):int(len(original_s
 import copy
 signal = copy.deepcopy(original_signal)
 # Adding a bias to prevent zero crossings
-dc_bias = 5
-signal = 0.0001*signal + dc_bias
+# signal = 0.0001*signal
+# dc_bias = 1.001*max(abs(signal))
+dc_bias = -min(signal)
+signal = signal+dc_bias
 
 def envelopeDetector(signal, sos_LPF):
     signal_rect = [abs(k) for k in signal]
@@ -61,10 +63,23 @@ signal_reconstructed = envelope_estimate*np.cos(phase_estimate)-dc_bias
 # Some excursions at the beginning and end of the signal, so we'll clip those..
 # m = np.median(signal_reconstructed)
 # signal_clipped = np.clip(signal_reconstructed, -1000*m, 1000*m) # primarly targeting the spikes at the beginning and end of the signal
-signal_final = np.clip(signal_reconstructed, -0.2, 0.2) # primarly targeting the spikes at the beginning and end of the signal
+signal_final = np.clip(signal_reconstructed, -21000, 21000) # primarly targeting the spikes at the beginning and end of the signal
 signal_final = signal_final/max(signal_final)
-plt.plot(signal_final)
+plt.figure()
+plt.plot(original_signal)
+plt.title('Original signal')
 plt.grid()
+
+plt.figure()
+plt.plot(envelope_estimate)
+plt.title('Envelope')
+plt.grid()
+
+plt.figure()
+plt.plot(signal_final)
+plt.title('Recovered signal')
+plt.grid()
+
 plt.show()
 
 scaled_data = np.int16(signal_final*32767)
