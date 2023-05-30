@@ -1,100 +1,51 @@
-# Loads a wav file, extracts the envelope, and reconstructs the phase
-# Audio from (https://www.videvo.net/royalty-free-music-track/the-flight-of-the-bumble-bee-60s/231158/)
-
-# Baseband -> Baseband -> Phase recovery of BB signal
-
-import scipy
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import signal
 
-import wave
-filename = './Rimsky-Korsakov-The-Flight-of-the-Bumble-Bee-CLA014201.wav'
-# Open the .wav file
-with wave.open(filename, 'rb') as audio_file:
-    # Get the audio file parameters
-    sample_width = audio_file.getsampwidth()
-    num_channels = audio_file.getnchannels()
-    sample_rate = audio_file.getframerate()
-    num_frames = audio_file.getnframes()
+SAMPLE_RATE=1#1e9 # 1 GHz sample rate for the overall simulation
+FREQ_CARRIER = 0.25#250e6
 
-    # Read all frames from the audio file
-    audio_data = audio_file.readframes(num_frames)
+assert SAMPLE_RATE > 2*FREQ_CARRIER
 
-original_signal = np.frombuffer(audio_data, dtype=np.int16)    
+SPS = 8 # Note that this already fixes the symbol rate as sym_rate = sample_rate/sym_per_sample
 
-# truncate beginning and end (silence/zeros = bad for log function) + reducing the data size
-original_signal = original_signal[int(len(original_signal)/4):int(len(original_signal)*3/4)]
+num_symbols = 10
 
-import copy
-signal = copy.deepcopy(original_signal)
-# Adding a bias to prevent zero crossings
-# signal = 0.0001*signal
-# dc_bias = 1.001*max(abs(signal))
-dc_bias = -min(signal)
-signal = signal+dc_bias
+input_words = np.random.randint(0, 4, num_symbols) # An already-bitpacked source
+# input_words = [1]
 
-def envelopeDetector(signal, sos_LPF):
-    signal_rect = [abs(k) for k in signal]
-    envelope_estimate = scipy.signal.sosfilt(sos_LPF, signal_rect)
-    return envelope_estimate
+constellation_map = {
+    0:1+1j,
+    1:-1+1j,
+    2:-1-1j,
+    3:1-1j
+}
 
-envelope_estimate = envelopeDetector(signal, sos_LPF=scipy.signal.cheby1(15,40,0.5,'lowpass',output='sos'))
+complex_data = [constellation_map[w] for w in input_words]
 
-# plt.plot(signal)
-# plt.plot(envelope_estimate)
-# plt.grid()
-# plt.show()
+# Now we prepare the input to the RRC filter: For every input sample pad SPS-1 zeros.
+# Add suitable zero padding
+x_I = np.zeros([SPS*num_symbols])
+x_Q = np.zeros([SPS*num_symbols])
+for k in range(len(complex_data)):
+    x_I[k*SPS] = np.real(complex_data[k])
+    x_Q[k*SPS] = np.imag(complex_data[k])
 
-def plotError(sig1,sig2):
-    assert len(sig1)==len(sig2)
-    error_sig = sig1-sig2
-    plt.plot(abs(error_sig))
+# RRC filter
+num_taps = 101 # ie length of this FIR filter, should be ODD
+beta = 0.35 # excess bandwidth relative to a brick wall function
+Ts = SPS*(1/SAMPLE_RATE)
+t = np.arange(num_taps) - (num_taps-1)//2 # interval from -num_taps to +num_taps
+rrc_wave = 1/Ts*np.sinc(t/Ts) * np.cos(np.pi*beta*t/Ts) / (1 - (2*beta*t/Ts)**2)
 
-def dumpWav(signal):
-    return None
+# Pulse shaping
+bb_tx_I = np.convolve(x_I, rrc_wave)
+bb_tx_Q = np.convolve(x_Q, rrc_wave)
 
-log_envelope_estimate = np.log(envelope_estimate)
-# Hilbert t/f and see if it's a faithful reproduction of the signal
-phase_estimate = np.imag(scipy.signal.hilbert(log_envelope_estimate)) # scipy.signal.hilbert actually outputs the analytic complex signal, f_t + j*Hilbert{f_t}
+# Polar plot of the complex baseband
 
-# Reconstructed signal
-signal_reconstructed = envelope_estimate*np.cos(phase_estimate)-dc_bias
+import animate
+animate.animateXY(bb_tx_I,bb_tx_Q,interval = 10)
 
-# Some excursions at the beginning and end of the signal, so we'll clip those..
-# m = np.median(signal_reconstructed)
-# signal_clipped = np.clip(signal_reconstructed, -1000*m, 1000*m) # primarly targeting the spikes at the beginning and end of the signal
-signal_final = np.clip(signal_reconstructed, -21000, 21000) # primarly targeting the spikes at the beginning and end of the signal
-signal_final = signal_final/max(signal_final)
-plt.figure()
-plt.plot(original_signal)
-plt.title('Original signal')
-plt.grid()
-
-plt.figure()
-plt.plot(envelope_estimate)
-plt.title('Envelope')
-plt.grid()
-
-plt.figure()
-plt.plot(signal_final)
-plt.title('Recovered signal')
-plt.grid()
-
-plt.show()
-
-scaled_data = np.int16(signal_final*32767)
-
-# Create a new WAV file
-with wave.open('output.wav', 'w') as wav_file:
-    wav_file.setnchannels(num_channels)  # Mono audio
-    wav_file.setsampwidth(sample_width)  # 16-bit audio
-    wav_file.setframerate(sample_rate)
-    wav_file.writeframes(scaled_data.tobytes())
-
-# ====================================================
-# TODO: Baseband -> Upconversion -> Phase recovery of BB signal
-
-# TODO: Demonstrate this for an image? 
-# Aside: Can adding a bias be used for compressing an image by discarding the DCT phase?
-
-
+# # Upconversion
+# carrier_freq = np.pi/4 #
